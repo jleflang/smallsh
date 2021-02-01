@@ -204,7 +204,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
 
                 // Check the input file descriptor
                 if (openFD == -1) {
-                    perror("Unable to open input file\n");
+                    perror("Unable to open input file");
                     exit(1);
                 }
 
@@ -212,7 +212,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
                 resultStat = dup2(openFD, 0);
 
                 if (resultStat == -1) {
-                    perror("Unable to assign input file\n");
+                    perror("Unable to assign input file");
                     exit(2);
                 }
 
@@ -227,7 +227,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
 
                 // Check the output file descriptor
                 if (writeFD == -1) {
-                    perror("Unable to open output file\n");
+                    perror("Unable to open output file");
                     exit(1);
                 }
 
@@ -235,12 +235,20 @@ void execUserCMD(char *input[], bool *isBackground, int status,
                 resultStat = dup2(writeFD, 1);
 
                 if (resultStat == -1) {
-                    perror("Unable to assign output file\n");
+                    perror("Unable to assign output file");
                     exit(2);
                 }
 
                 // Close
                 fcntl(writeFD, F_SETFD, FD_CLOEXEC);
+            }
+
+            // Execute the user's command
+            if (execvp(input[0], input)) {
+                // There was no command
+                printf("%s: no such file or directory\n", input[0]);
+                fflush(stdout);
+                exit(2);
             }
 
             break;
@@ -300,7 +308,8 @@ int main(void) {
         procInput(pid, &isBackgrounded, input, inFile, outFile);
 
         // Ignore comments and blanks
-        if ((strncmp(input[0], "#", 0) == 0) || (input[0][0] = '\0')) {
+        if ((strncmp(input[0], "#", 1) == 0) || 
+            (strcmp(input[0], "\0") == 0)) {
             continue;
         }
         // Exit commanded
@@ -308,7 +317,7 @@ int main(void) {
             runLoop = false;
         }
         // Change Directory "cd" commanded
-        else if (strcmp("exit", input[0]) == 0) {
+        else if (strcmp("cd", input[0]) == 0) {
             // User specified a dir
             if (input[1] != NULL) {
                 if (chdir(input[1]) == -1) {
@@ -322,7 +331,7 @@ int main(void) {
             }
         }
         // Status commanded
-        else if (strcmp("status", input[0])) {
+        else if (strcmp("status", input[0]) == 0) {
             printStatus(exitVal);
         }
         // Execute user command
@@ -336,9 +345,9 @@ int main(void) {
         inFile[0] = '\0';
         outFile[0] = '\0';
 
-        for (int i = 0; i < 512; i++) {
+        for (int i = 0; (i < 512) && (input[i] != NULL); i++) {
 
-            memset(input[i], '\0', strlen(input[i]));
+            memset(input[i], 0, strlen(input[i]));
 
         }
 
