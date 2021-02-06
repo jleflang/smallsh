@@ -10,6 +10,7 @@
  * Licenced under BSD 2-Clause "Simplified"
  *
  */
+#define _GNU_SOURCE
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -20,7 +21,9 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <limits.h>
 
+#define MAX_ARGS        512
 #define MAX_LINE_LENGTH 2048
 
 // Global flag for Backgrounding
@@ -60,7 +63,8 @@ void handleTSTP(int signo) {
 
 /**
  * procInput subroutine
- * Process the user's input for our shell
+ * Process the user's input for our shell into an array of args, and separate
+ * file names.
  *
  * Args:
  *  int shell_pid: Shell's PID
@@ -70,10 +74,10 @@ void handleTSTP(int signo) {
  *  char *oFile: Output files, if in args
  *
  */
-void procInput(const int shell_pid, bool *inBackmode, 
-        char *procArr[], char *rFile, char *oFile) {
+void procInput(const int shell_pid, bool *inBackmode, char *procArr[], 
+               char *rFile, char *oFile) {
 
-    char inArgs[MAX_LINE_LENGTH], *token = NULL;
+    char inArgs[MAX_LINE_LENGTH], *token = NULL, *savePtr = NULL;
     int curs;
 
     // Prompt and wait for user input
@@ -88,12 +92,12 @@ void procInput(const int shell_pid, bool *inBackmode,
 
     // User entered a blank
     if (strcmp(inArgs, "") == 0) {
-        procArr[0] = strdup("");
+        procArr[0] = '\0';
         return;
     }
 
     // Tokenize the input
-    token = strtok(inArgs, " ");
+    token = strtok_r(inArgs, " ", &savePtr);
     curs = 0;
 
     // Examine tokens for special chars and functions
@@ -101,18 +105,19 @@ void procInput(const int shell_pid, bool *inBackmode,
 
         // & -> Background process
         if (strcmp(token, "&") == 0) {
+            // Set the background mode flag
             *inBackmode = true;
         }
         // < -> Input Filename
         else if (strcmp(token, "<") == 0) {
             // Store the input file
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &savePtr);
             strcpy(rFile, token);
         }
         // > -> Output Filename
         else if (strcmp(token, ">") == 0) {
             // Store the output file
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &savePtr);
             strcpy(oFile, token);
         }
         // Command
@@ -125,7 +130,7 @@ void procInput(const int shell_pid, bool *inBackmode,
                 // If $$ is in the string, expand to shell_pid
                 if ((procArr[curs][j] == '$') && 
                         (procArr[curs][j + 1] == '$')) {
-                    // Replace
+                    // Replace in-place the pid
                     procArr[curs][j] = '\0';
                     snprintf(procArr[curs], 256, "%s%d", 
                             procArr[curs], shell_pid);
@@ -137,9 +142,12 @@ void procInput(const int shell_pid, bool *inBackmode,
 
         // Go to the next token
         curs++;
-        token = strtok(NULL, " ");
+        token = strtok_r(NULL, " ", &savePtr);
 
     }
+
+    // Add an additional NULL
+    procArr[curs] = NULL;
 
 }
 
@@ -156,10 +164,12 @@ void printStatus(int childStatus) {
     if (WIFEXITED(childStatus)) {
         // We have an exit status
         printf("exit value %d\n", WEXITSTATUS(childStatus));
+        fflush(stdout);
 
     } else {
         // we got a signal from the user
         printf("terminated by signal %d\n", WTERMSIG(childStatus));
+        fflush(stdout);
     }
 }
 
@@ -171,40 +181,49 @@ void printStatus(int childStatus) {
  *  char *input[]: Array of user command args
  *  bool *isBackground: Are we running in background
  *  int status: Process status
- *  struct sigaction sa: Process signal handler
+ *  struct sigaction sa_ign: Process signal handler
+ *  struct sigaction sa_sigint: Process signal handler
  *  char *inFile: Input file
  *  char *outFile: Output file
  *
  */
 void execUserCMD(char *input[], bool *isBackground, int status, 
-        struct sigaction sa, char *inFile, char *outFile) {
+                 struct sigaction sa_tstp, struct sigaction sa_sigint,
+                 char *inFile, char *outFile) {
 
     int openFD, writeFD, resultStat;
     pid_t childPid = -5;
-
+    
+    // This mirrors Exploration: Process API - Executing a New Program
 
     // Spawn the child
     childPid = fork();
 
     switch (childPid) {
         case -1:
+            // Could not spawn a child
             perror("Spawn Failed!\n");
+            fflush(stdout);
             exit(1);
 
             break;
 
         case 0:
-            // Take the handler, now hook ^C
-            sa.sa_handler = SIG_DFL;
-            sigaction(SIGINT, &sa, NULL);
+            // Take the handler, now hook ^Z
+            sigaction(SIGTSTP, &sa_tstp, NULL);
+            // And if we are not in the background, now hook ^C
+            if (!*isBackground) sigaction(SIGINT, &sa_sigint, NULL);
 
-            if (strcmp(inFile, "") == 0) {
+            // If the user specified an input file redirect in foreground
+            // mode
+            if ((strcmp(inFile, "") != 0) && !*isBackground) {
                 // Open the input file
                 openFD = open(inFile, O_RDONLY);
 
                 // Check the input file descriptor
                 if (openFD == -1) {
                     perror("Unable to open input file");
+                    fflush(stdout);
                     exit(1);
                 }
 
@@ -213,6 +232,30 @@ void execUserCMD(char *input[], bool *isBackground, int status,
 
                 if (resultStat == -1) {
                     perror("Unable to assign input file");
+                    fflush(stdout);
+                    exit(2);
+                }
+
+                // Close
+                fcntl(openFD, F_SETFD, FD_CLOEXEC);
+
+            } else if ((strcmp(inFile, "") == 0) && *isBackground) {
+                // Redirect to /dev/null
+                openFD = ("/dev/null", O_RDONLY);
+
+                // Check the input file descriptor
+                if (openFD == -1) {
+                    perror("Unable to open input file");
+                    fflush(stdout);
+                    exit(1);
+                }
+
+                // Copy the descriptor and assign
+                resultStat = dup2(openFD, 0);
+
+                if (resultStat == -1) {
+                    perror("Unable to assign input file");
+                    fflush(stdout);
                     exit(2);
                 }
 
@@ -220,14 +263,15 @@ void execUserCMD(char *input[], bool *isBackground, int status,
                 fcntl(openFD, F_SETFD, FD_CLOEXEC);
 
             }
-
-            if (strcmp(outFile, "") == 0) {
+            
+            if ((strcmp(outFile, "") != 0) && !*isBackground) {
                 // Open the output file
-                writeFD = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                writeFD = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 0640);
 
                 // Check the output file descriptor
                 if (writeFD == -1) {
                     perror("Unable to open output file");
+                    fflush(stdout);
                     exit(1);
                 }
 
@@ -236,16 +280,41 @@ void execUserCMD(char *input[], bool *isBackground, int status,
 
                 if (resultStat == -1) {
                     perror("Unable to assign output file");
+                    fflush(stdout);
                     exit(2);
                 }
 
                 // Close
                 fcntl(writeFD, F_SETFD, FD_CLOEXEC);
+
+            } else if ((strcmp(outFile, "") == 0) && *isBackground) {
+                // Redirect to /dev/null
+                openFD = ("/dev/null", O_WRONLY | O_TRUNC);
+
+                // Check the output file descriptor
+                if (openFD == -1) {
+                    perror("Unable to open input file");
+                    fflush(stdout);
+                    exit(1);
+                }
+
+                // Copy the descriptor and assign
+                resultStat = dup2(openFD, 0);
+
+                if (resultStat == -1) {
+                    perror("Unable to assign input file");
+                    fflush(stdout);
+                    exit(2);
+                }
+
+                // Close
+                fcntl(openFD, F_SETFD, FD_CLOEXEC);
+
             }
 
             // Execute the user's command
-            if (execvp(input[0], input)) {
-                // There was no command
+            if (execvp(input[0], input) == -1) {
+                // There was no valid command
                 printf("%s: no such file or directory\n", input[0]);
                 fflush(stdout);
                 exit(2);
@@ -255,7 +324,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
 
         default:
             // Check for a background task and wait
-            if (isBackground && isBack) {
+            if (*isBackground && isBack) {
                 pid_t actPid = waitpid(childPid, &status, WNOHANG);
                 printf("background pid is %d\n", childPid);
                 fflush(stdout);
@@ -279,27 +348,27 @@ int main(void) {
 
     int pid = getpid(), exitVal = 0;
     bool isExit = false, isBackgrounded = false, runLoop = true;
-    char *inFile = NULL, *outFile = NULL, **input = NULL;
+    char *inFile = NULL, *outFile = NULL, **input = NULL, path[PATH_MAX];
     // Signal structs
     struct sigaction small_sigint = {0}, small_sigtstp = {0};
 
     // Allocate the input buffer
-    input = (char **)calloc(512, sizeof(char *));
+    input = (char **)calloc(MAX_ARGS, sizeof(char *));
 
     // Allocate the filename buffers
     inFile = (char *)calloc(256, sizeof(char));
     outFile = (char *)calloc(256, sizeof(char));
 
     // Make the Signal Handlers
-    small_sigint.sa_handler = SIG_IGN;
+    small_sigint.sa_handler = SIG_DFL;
     sigfillset(&small_sigint.sa_mask);
-    small_sigint.sa_flags = 0;
+    small_sigint.sa_flags = SA_RESTART;
     sigaction(SIGINT, &small_sigint, NULL);
 
     small_sigtstp.sa_handler = handleTSTP;
     sigfillset(&small_sigtstp.sa_mask);
-    small_sigtstp.sa_flags = 0;
-    sigaction(SIGINT, &small_sigtstp, NULL);
+    small_sigtstp.sa_flags = SA_RESTART;
+    sigaction(SIGTSTP, &small_sigtstp, NULL);
 
     // Main Run Loop
     while (runLoop) {
@@ -318,15 +387,17 @@ int main(void) {
         }
         // Change Directory "cd" commanded
         else if (strcmp("cd", input[0]) == 0) {
-            // User specified a dir
+            // User specified a directory to change to
             if (input[1] != NULL) {
+                // If the directory does not exist, then perror
                 if (chdir(input[1]) == -1) {
                     printf("No directory found named %s", input[1]);
                     fflush(stdout);
                 }
             } else {
                 // Go to HOME
-                chdir(getenv("HOME"));
+                getcwd(path, sizeof(path));
+                chdir(path);
 
             }
         }
@@ -336,8 +407,8 @@ int main(void) {
         }
         // Execute user command
         else {
-            execUserCMD(input, &isBackgrounded, exitVal, small_sigint, 
-                    inFile, outFile);
+            execUserCMD(input, &isBackgrounded, exitVal, small_sigtstp,
+                        small_sigint, inFile, outFile);
         }
 
         // Reset the runtime vars
@@ -345,11 +416,8 @@ int main(void) {
         inFile[0] = '\0';
         outFile[0] = '\0';
 
-        for (int i = 0; (i < 512) && (input[i] != NULL); i++) {
-
+        for (int i = 0; (i < MAX_ARGS) && (input[i] != NULL); i++)
             memset(input[i], 0, strlen(input[i]));
-
-        }
 
     }
 
