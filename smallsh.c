@@ -140,17 +140,20 @@ void procInput(const int shell_pid, bool *inBackmode, char *procArr[],
                     // If we are not at the end of the string
                     if (strncmp(procArr[curs], "\0", j + 2) != 0) {
 
+                        // Make a dupe of the end of the string
                         temp = strdup(procArr[curs] + j + 2);
 
+                        // Reformat the string
                         procArr[curs][j] = '\0';
-
                         snprintf(procArr[curs], 256, "%s%d%s", 
                                  procArr[curs], shell_pid, temp); 
 
+                        // Free
                         if (temp != NULL) free(temp);
                         temp = NULL;
 
                     } else {
+                        // End of the string
                         procArr[curs][j] = '\0';
                         snprintf(procArr[curs], 256, "%s%d", 
                                  procArr[curs], shell_pid);
