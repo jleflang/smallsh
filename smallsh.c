@@ -79,8 +79,8 @@ void procInput(const int shell_pid, bool *inBackmode, char *procArr[],
                char *rFile, char *oFile) {
 
     char inArgs[MAX_LINE_LENGTH], *token = NULL, *savePtr = NULL, 
-         s_pid[128], *expanded = NULL, *temp = NULL;
-    int curs;
+         s_pid[128], *temp = NULL, *temp2 = NULL;
+    int curs, prev;
 
     // Convert the shell PID to a string for later use
     sprintf(s_pid, "%d", shell_pid);
@@ -127,42 +127,50 @@ void procInput(const int shell_pid, bool *inBackmode, char *procArr[],
         }
         // User External Commands
         else {
-            // Copy over the command to a buffer
-            procArr[curs] = strdup(token);
+            // Allocate the buffers
+            temp = (char *)calloc(128, sizeof(char));
+            temp2 = (char *)calloc(128, sizeof(char));
 
-            // Go through the args for $$
-            for (int j = 0; j < strlen(procArr[curs]); j++) {
-                // If $$ is the current token, expand to shell_pid
-                if ((procArr[curs][j] == '$') && 
-                    (procArr[curs][j + 1] == '$')) {
-                                    
-                    // Replace the shell PID in-place
-                    // If we are not at the end of the string
-                    if (strncmp(procArr[curs], "\0", j + 2) != 0) {
+            // Set a var for checking if we have more than one expansion
+            prev = 0;
 
-                        // Make a dupe of the end of the string
-                        temp = strdup(procArr[curs] + j + 2);
-
-                        // Reformat the string
-                        procArr[curs][j] = '\0';
-                        snprintf(procArr[curs], 256, "%s%d%s", 
-                                 procArr[curs], shell_pid, temp); 
-
-                        // Free
-                        if (temp != NULL) free(temp);
-                        temp = NULL;
+            // Go through the arg for $$
+            for (int j = 0; j < strlen(token); j++) {
+                // If $$ is the current chars, expand to shell_pid
+                if ((token[j] == '$') && (token[j + 1] == '$')) {
+                    // Replace PID in-place
+                    // Grab the first half
+                    if (prev == 0) {
+                        // First time of duping
+                        temp = strndup(token, j - 1);
 
                     } else {
-                        // End of the string
-                        procArr[curs][j] = '\0';
-                        snprintf(procArr[curs], 256, "%s%d", 
-                                 procArr[curs], shell_pid);
-
+                        // Get the segment of token between the previous and
+                        // the current index
+                        temp = strndup(token + prev, j - 1);
                     }
 
+                    // Grab the second half
+                    temp2 = strdup(token + j + 2);
+
+                    // Add the PID
+                    strcat(temp, s_pid);
+
+                    // Add the second half
+                    strcat(temp, temp2);
+
+                    // Save where the previous $$ was
+                    prev = j + 2;
                 }
 
             }
+
+            // Save to the array
+            *procArr[curs] = &temp;
+
+            // Free
+            if (temp2 != NULL) free(temp2);
+            temp2 = NULL;
         }
 
         // Increment the counter
@@ -267,7 +275,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
             // If the input file is empty and we are in the background
             } else if ((strcmp(inFile, "") == 0) && *isBackground) {
                 // Redirect to /dev/null
-                openFD = ("/dev/null", O_RDONLY);
+                openFD = open("/dev/null", O_RDONLY);
 
                 // Check the input file descriptor
                 if (openFD == -1) {
@@ -320,7 +328,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
             // If there is no output redirect and we are in the background
             } else if ((strcmp(outFile, "") == 0) && *isBackground) {
                 // Redirect to /dev/null
-                writeFD = ("/dev/null", O_WRONLY | O_TRUNC);
+                writeFD = open("/dev/null", O_WRONLY | O_TRUNC);
 
                 // Check the output file descriptor
                 if (writeFD == -1) {
