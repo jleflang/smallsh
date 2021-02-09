@@ -82,6 +82,10 @@ void procInput(const int shell_pid, bool *inBackmode, char *procArr[],
          s_pid[128], *temp = NULL, *temp2 = NULL;
     int curs, prev;
 
+    // Initialize
+    for (int i = 0; i < MAX_ARGS; i++) 
+        procArr[i] = (char *)calloc(256, sizeof(char)); 
+
     // Convert the shell PID to a string for later use
     sprintf(s_pid, "%d", shell_pid);
 
@@ -142,16 +146,16 @@ void procInput(const int shell_pid, bool *inBackmode, char *procArr[],
                     // Grab the first half
                     if (prev == 0) {
                         // First time of duping
-                        temp = strndup(token, j - 1);
+                        temp = strndup(token, j);
 
                     } else {
                         // Get the segment of token between the previous and
                         // the current index
-                        temp = strndup(token + prev, j - 1);
+                        temp = strndup(token + prev, j);
                     }
 
                     // Grab the second half
-                    temp2 = strdup(token + j + 2);
+                    temp2 = strdup(token + j + 2);                    
 
                     // Add the PID
                     strcat(temp, s_pid);
@@ -166,7 +170,12 @@ void procInput(const int shell_pid, bool *inBackmode, char *procArr[],
             }
 
             // Save to the array
-            *procArr[curs] = &temp;
+            if (strcmp(temp, "") != 0) {
+                procArr[curs] = temp;
+            } else {
+                temp = strdup(token);
+                procArr[curs] = temp;
+            }
 
             // Free
             if (temp2 != NULL) free(temp2);
@@ -303,7 +312,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
             if (strcmp(outFile, "") != 0) {
                 // Open the output file
                 writeFD = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 
-                               S_IRUSR | S_IWUSR | S_IWGRP | S_IWOTH);
+                               S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 
                 // Check the output file descriptor
                 if (writeFD == -1) {
@@ -392,10 +401,6 @@ int main(void) {
     // Signal structs
     struct sigaction small_sigint = {0}, small_sigtstp = {0};
 
-    // Initialize
-    for (int i = 0; i < MAX_ARGS; i++) 
-        input[i] = (char *)calloc(256, sizeof(char));
-
     // Allocate the filename buffers
     inFile = (char *)calloc(256, sizeof(char));
     outFile = (char *)calloc(256, sizeof(char));
@@ -419,7 +424,7 @@ int main(void) {
 
         // Ignore comments and blanks
         if ((strncmp(input[0], "#", 1) == 0) || 
-            (strcmp(input[0], "\0") == 0)) {
+            (strcmp(input[0], "") == 0)) {
             continue;
         }
         // Exit commanded
