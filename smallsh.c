@@ -234,7 +234,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
                  char *inFile, char *outFile) {
 
     int openFD, writeFD, resultStat;
-    pid_t childPid = -5;
+    pid_t childPid = -5, actPid = -5;
     
     // This mirrors Exploration: Process API - Executing a New Program
 
@@ -311,8 +311,9 @@ void execUserCMD(char *input[], bool *isBackground, int status,
             // If the user specified an output file redirect
             if (strcmp(outFile, "") != 0) {
                 // Open the output file
+                // The 0640 permissions is only allowed (no others)
                 writeFD = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 
-                               S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                               S_IRUSR | S_IWUSR | S_IRGRP);
 
                 // Check the output file descriptor
                 if (writeFD == -1) {
@@ -337,7 +338,7 @@ void execUserCMD(char *input[], bool *isBackground, int status,
             // If there is no output redirect and we are in the background
             } else if ((strcmp(outFile, "") == 0) && *isBackground) {
                 // Redirect to /dev/null
-                writeFD = open("/dev/null", O_WRONLY | O_TRUNC);
+                writeFD = open("/dev/null", O_WRONLY);
 
                 // Check the output file descriptor
                 if (writeFD == -1) {
@@ -374,21 +375,26 @@ void execUserCMD(char *input[], bool *isBackground, int status,
         default:
             // Check for a background task and wait
             if (*isBackground && isBack) {
-                pid_t actPid = waitpid(childPid, &status, WNOHANG);
+                actPid = waitpid(childPid, &status, WNOHANG);
                 printf("background pid is %d\n", childPid);
                 fflush(stdout);
+
             } else {
-                pid_t actPid = waitpid(childPid, &status, 0);
+                // Run the forground process
+                actPid = waitpid(childPid, &status, 0);
+
             }
 
             break;
     }
 
+    // When a child has finished
     while ((childPid = waitpid(-1, &status, WNOHANG)) > 0) {
-        // Inform user when process is done
+        // Tell the user it is done
         printf("background pid %d is done: ", childPid);
         fflush(stdout);
         printStatus(status);
+
     }
 
 }
@@ -424,7 +430,7 @@ int main(void) {
 
         // Ignore comments and blanks
         if ((strncmp(input[0], "#", 1) == 0) || 
-            (strcmp(input[0], "") == 0)) {
+            (strcmp(input[0], "\0") == 0)) {
             continue;
         }
         // Exit commanded
